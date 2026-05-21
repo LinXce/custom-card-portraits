@@ -1,0 +1,14 @@
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\bin\Release\net9.0-windows\CustomCardFace.Editor.exe
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\bin\Release\net9.0-windows\CustomCardFace.Editor.deps.json
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\bin\Release\net9.0-windows\CustomCardFace.Editor.runtimeconfig.json
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\bin\Release\net9.0-windows\CustomCardFace.Editor.dll
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\bin\Release\net9.0-windows\CustomCardFace.Editor.pdb
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\CustomCardFace.Editor.GeneratedMSBuildEditorConfig.editorconfig
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\CustomCardFace.Editor.AssemblyInfoInputs.cache
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\CustomCardFace.Editor.AssemblyInfo.cs
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\CustomCardFace.Editor.csproj.CoreCompileInputs.cache
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\CustomCardFace.Editor.dll
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\refint\CustomCardFace.Editor.dll
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\CustomCardFace.Editor.pdb
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\CustomCardFace.Editor.genruntimeconfig.cache
+F:\Peslanna\StS2\custom-card-face\tools\CustomCardFace.Editor\obj\Release\net9.0-windows\ref\CustomCardFace.Editor.dll
