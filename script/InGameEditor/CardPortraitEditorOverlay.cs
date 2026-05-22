@@ -66,7 +66,7 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 		UpdateLayout();
 		GetViewport().Connect(Viewport.SignalName.SizeChanged, Callable.From(UpdateLayout));
 		ReloadAtlasIndex();
-		SetStatus("选择卡牌 → 选择图片 → 拖拽框选裁切 → 保存。ESC 关闭。右键清除选区。", isError: false);
+		SetStatus("选择卡牌 → 选择图片 → 拖拽框选裁切 → 保存（ESC 关闭、右键清除选区）", isError: false);
 		if (_openOnReady)
 		{
 			_openOnReady = false;
@@ -172,10 +172,12 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 
 		var pickBtn = CreateGameButton("选择图片…", "PickImage");
 		var resetBtn = CreateGameButton("重置", "Reset");
-		var saveBtn = CreateGameButton("裁切并保存", "Save");
+        var cropBtn = CreateGameButton("裁切", "Crop");
+        var saveBtn = CreateGameButton("保存", "Save");
 		var closeBtn = CreateGameButton("关闭(ESC)", "Close");
 		_topBar.AddChild(pickBtn);
-		_topBar.AddChild(resetBtn);
+        _topBar.AddChild(resetBtn);
+		_topBar.AddChild(cropBtn);
 		_topBar.AddChild(saveBtn);
 		_topBar.AddChild(closeBtn);
 
@@ -195,19 +197,19 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 		right.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
 		previews.AddChild(right);
 
-		var originalTitle = new Label { Text = "原版卡图（图鉴样式）" };
+		var originalTitle = new Label { Text = "替换预览（图鉴样式）" };
 		ApplyGameLabelStyle(originalTitle, 22);
 		left.AddChild(originalTitle);
 
-		_originalCardPreview = CreateCardPreview();
-		left.AddChild(WrapCardPreview(_originalCardPreview));
+		_overrideCardPreview = CreateCardPreview();
+		left.AddChild(WrapCardPreview(_overrideCardPreview, 1.2f));
 
-		var overrideTitle = new Label { Text = "替换预览（图鉴样式）" };
+		var overrideTitle = new Label { Text = "原版卡图（图鉴样式）" };
 		ApplyGameLabelStyle(overrideTitle, 22);
 		right.AddChild(overrideTitle);
 
-		_overrideCardPreview = CreateCardPreview();
-		right.AddChild(WrapCardPreview(_overrideCardPreview));
+		_originalCardPreview = CreateCardPreview();
+		right.AddChild(WrapCardPreview(_originalCardPreview, 0.8f));
 
 		var workTitle = new Label { Text = "工作图（拖拽框选裁切）" };
 		ApplyGameLabelStyle(workTitle, 22);
@@ -261,6 +263,7 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 		_poolSelect.ItemSelected += OnPoolSelected;
 		_cardSelect.ItemSelected += OnCardSelected;
 		pickBtn.Pressed += () => _fileDialog.PopupCentered(new Vector2I(900, 600));
+		cropBtn.Pressed += CropWorkImage;
 		resetBtn.Pressed += ResetWorkImage;
 		saveBtn.Pressed += SaveOverride;
 		closeBtn.Pressed += Close;
@@ -396,11 +399,15 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			// Ignore if methods unavailable in older engine builds
 		}
 
+		// // Ensure custom preview scales are applied after visuals update
+		// _overrideCardPreview.SetDeferred("scale", Vector2.One * 1.2f);
+		// _originalCardPreview.SetDeferred("scale", Vector2.One * 0.8f);
+
 		Texture2D? originalPortrait = LoadOriginalPortrait(cardModel);
 		ApplyPortraitOverride(_originalCardPreview, originalPortrait);
 		ApplyPortraitOverride(_overrideCardPreview, originalPortrait);
 
-		if (TryLoadOverrideImage(pool, id, out Image? img))
+		if (ConfigStore.IsCardOverrideEnabled(pool, id) && TryLoadOverrideImage(pool, id, out Image? img))
 		{
 			_cropOverlay.SetWorkImage(img);
 			var tex = ImageTexture.CreateFromImage(img);
@@ -424,7 +431,7 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			_cropOverlay.SetWorkImage(img);
 			_workPreview.Texture = ImageTexture.CreateFromImage(img);
 			ApplyPortraitOverride(_overrideCardPreview, _workPreview.Texture as Texture2D);
-			SetStatus("已加载工作图：在右侧预览拖拽框选裁切，然后点击“裁切并保存”。", isError: false);
+			SetStatus("已加载工作图：先裁切，再保存。", isError: false);
 		}
 		catch (Exception ex)
 		{
@@ -472,8 +479,10 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 				return;
 			}
 
+			_applySavedTextureToPreview(toSave);
+			ConfigStore.SetCardOverrideEnabled(pool, id, true);
+
 			SetStatus($"已保存: {outVirtual}", isError: false);
-			RefreshPreviews();
 		}
 		catch (Exception ex)
 		{
@@ -492,8 +501,50 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 		_cropOverlay.ClearSelection();
 		_workPreview.Texture = null;
 		_cropOverlay.SetWorkImage(null);
+		ConfigStore.SetCardOverrideEnabled(_currentPool!.ToLowerInvariant(), _currentCard!.ToLowerInvariant(), false);
 		ApplyPortraitOverride(_overrideCardPreview, LoadOriginalPortrait(_overrideCardPreview.Model));
-		SetStatus("已重置为原版预览。", isError: false);
+		SetStatus("已重置为原版预览，并关闭该卡的替换。", isError: false);
+	}
+
+	private void CropWorkImage()
+	{
+		if (string.IsNullOrWhiteSpace(_currentPool) || string.IsNullOrWhiteSpace(_currentCard))
+		{
+			SetStatus("请先选择卡牌。", isError: true);
+			return;
+		}
+
+		Image? work = _cropOverlay.GetWorkImage();
+		if (work == null)
+		{
+			SetStatus("没有工作图。请先“选择图片…”。", isError: true);
+			return;
+		}
+
+		Rect2I? crop = _cropOverlay.GetCropRect();
+		if (!crop.HasValue)
+		{
+			SetStatus("请先框选一个裁剪区域。", isError: true);
+			return;
+		}
+
+		Rect2I r = ClampRect(crop.Value, work.GetWidth(), work.GetHeight());
+		if (r.Size.X <= 0 || r.Size.Y <= 0)
+		{
+			SetStatus("裁剪区域无效。", isError: true);
+			return;
+		}
+
+		Image cropped = work.GetRegion(r);
+		_cropOverlay.SetWorkImage(cropped);
+		_workPreview.Texture = ImageTexture.CreateFromImage(cropped);
+		ApplyPortraitOverride(_overrideCardPreview, _workPreview.Texture as Texture2D);
+		SetStatus("已裁切工作图，接下来点击保存。", isError: false);
+	}
+
+	private void _applySavedTextureToPreview(Image savedImage)
+	{
+		ApplyPortraitOverride(_overrideCardPreview, ImageTexture.CreateFromImage(savedImage));
 	}
 
 	private static CardModel? ResolveCardModel(string pool, string id)
@@ -507,326 +558,4 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			string.Equals(c.Id.Entry, entry, StringComparison.OrdinalIgnoreCase));
 	}
 
-	private static Vector2 GetPanelSize(Vector2 viewportSize)
-	{
-		float margin = 60f;
-		float maxWidth = MathF.Max(0f, viewportSize.X - margin);
-		float maxHeight = MathF.Max(0f, viewportSize.Y - margin);
-		float width = MathF.Min(1540f, maxWidth);
-		float height = MathF.Min(940f, maxHeight);
-		if (width <= 0f)
-			width = viewportSize.X;
-		if (height <= 0f)
-			height = viewportSize.Y;
-		return new Vector2(width, height);
-	}
-
-	private void UpdateLayout()
-	{
-		if (_panel == null || _topBar == null)
-			return;
-		_panel.Size = GetPanelSize(GetViewport().GetVisibleRect().Size);
-		// _panel.Position = -_panel.Size / 2;
-        _panel.Position = new Vector2(200, 50);
-		float topWidth = MathF.Max(0f, _panel.Size.X - 40f);
-		_topBar.CustomMinimumSize = new Vector2(topWidth, 0f);
-	}
-
-	private static Texture2D? LoadOriginalPortrait(CardModel? model)
-	{
-		if (model == null)
-			return null;
-		string path = model.HasPortrait ? model.PortraitPath : CardModel.MissingPortraitPath;
-		return ResourceLoader.Load<Texture2D>(path);
-	}
-
-	private static void ApplyPortraitOverride(NCard card, Texture2D? portrait)
-	{
-		if (portrait == null)
-			return;
-		var standard = card.GetNodeOrNull<TextureRect>("%Portrait");
-		if (standard != null)
-			standard.Texture = portrait;
-		var ancient = card.GetNodeOrNull<TextureRect>("%AncientPortrait");
-		if (ancient != null)
-			ancient.Texture = portrait;
-	}
-
-	private static bool TryLoadOverrideImage(string pool, string id, out Image? image)
-	{
-		image = null;
-		string overrideVirtual = $"{OverrideRootVirtual}/{pool}/{id}.png";
-		string overrideAbs = ProjectSettings.GlobalizePath(overrideVirtual);
-		if (!File.Exists(overrideAbs))
-			return false;
-
-		var img = new Image();
-		var err = img.Load(overrideAbs);
-		if (err != Error.Ok)
-			return false;
-		image = img;
-		return true;
-	}
-
-	private static Control WrapCardPreview(NCard card)
-	{
-		var panel = CreateRoundedPanel();
-		var center = new CenterContainer
-		{
-			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-			SizeFlagsVertical = Control.SizeFlags.ExpandFill
-		};
-		card.Scale = Vector2.One * 1.6f;
-		card.MouseFilter = Control.MouseFilterEnum.Ignore;
-		center.AddChild(card);
-		panel.AddChild(center);
-		return panel;
-	}
-
-	private static PanelContainer CreateRoundedPanel()
-	{
-		var panel = new PanelContainer
-		{
-			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-			SizeFlagsVertical = Control.SizeFlags.ExpandFill
-		};
-		var style = new StyleBoxFlat
-		{
-			BgColor = new Color(0f, 0f, 0f, 0.35f),
-			CornerRadiusTopLeft = 16,
-			CornerRadiusTopRight = 16,
-			CornerRadiusBottomLeft = 16,
-			CornerRadiusBottomRight = 16
-		};
-		style.ContentMarginLeft = 12;
-		style.ContentMarginRight = 12;
-		style.ContentMarginTop = 12;
-		style.ContentMarginBottom = 12;
-		panel.AddThemeStyleboxOverride("panel", style);
-		return panel;
-	}
-
-	private static NCard CreateCardPreview()
-	{
-		var scene = GD.Load<PackedScene>("res://scenes/cards/card.tscn");
-		return scene.Instantiate<NCard>();
-	}
-
-	private static TextureButton CreateGameButton(string text, string name)
-	{
-		var button = new TextureButton
-		{
-			Name = name,
-			FocusMode = Control.FocusModeEnum.All,
-			CustomMinimumSize = new Vector2(180, 44)
-		};
-
-		var normalTex = GD.Load<Texture2D>("res://asset/image/button.png");
-		var outlineTex = GD.Load<Texture2D>("res://asset/image/button_outline.png");
-		if (normalTex != null)
-		{
-			button.TextureNormal = normalTex;
-		}
-		if (outlineTex != null)
-		{
-			button.TextureHover = outlineTex;
-			button.TexturePressed = outlineTex;
-		}
-
-		var label = new Label
-		{
-			Text = text,
-			FocusMode = Control.FocusModeEnum.None,
-			HorizontalAlignment = HorizontalAlignment.Center,
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		label.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-		label.SetOffsetsPreset(Control.LayoutPreset.FullRect);
-		ApplyGameLabelStyle(label, 22);
-		button.AddChild(label);
-		return button;
-	}
-
-	private static void ApplyGameLabelStyle(Label label, int fontSize)
-	{
-		label.ApplyLocaleFontSubstitution(FontType.Regular, "font");
-		label.AddThemeFontSizeOverride("font_size", fontSize);
-		label.AddThemeColorOverride("font_color", StsColors.cream);
-		label.AddThemeColorOverride("font_outline_color", StsColors.cardTitleOutlineCommon);
-		label.AddThemeConstantOverride("outline_size", 6);
-	}
-
-	private static void ApplyGameOptionStyle(OptionButton option, int fontSize)
-	{
-		option.AddThemeFontSizeOverride("font_size", fontSize);
-		option.AddThemeColorOverride("font_color", StsColors.cream);
-		option.AddThemeColorOverride("font_outline_color", StsColors.cardTitleOutlineCommon);
-		option.AddThemeConstantOverride("outline_size", 6);
-	}
-
-	private static Rect2I ClampRect(Rect2I r, int w, int h)
-	{
-		int x = Math.Clamp(r.Position.X, 0, Math.Max(0, w - 1));
-		int y = Math.Clamp(r.Position.Y, 0, Math.Max(0, h - 1));
-		int rw = Math.Clamp(r.Size.X, 0, w - x);
-		int rh = Math.Clamp(r.Size.Y, 0, h - y);
-		return new Rect2I(x, y, rw, rh);
-	}
-
-	private void SetStatus(string text, bool isError)
-	{
-		_status.Text = text;
-		_status.Modulate = isError ? new Color(1f, 0.4f, 0.4f) : Colors.White;
-	}
-
-	private sealed partial class CropOverlay : Control
-	{
-		private readonly TextureRect _target;
-		private Image? _work;
-		private bool _dragging;
-		private bool _hasSelection;
-		private Vector2I _start;
-		private Vector2I _end;
-
-		public CropOverlay(TextureRect target)
-		{
-			_target = target;
-			MouseFilter = MouseFilterEnum.Stop;
-		}
-
-		public void SetWorkImage(Image? img)
-		{
-			_work = img;
-			_hasSelection = false;
-			_dragging = false;
-			QueueRedraw();
-		}
-
-		public Image? GetWorkImage() => _work;
-
-		public void ClearSelection()
-		{
-			_hasSelection = false;
-			_dragging = false;
-			QueueRedraw();
-		}
-
-		public Rect2I? GetCropRect()
-		{
-			if (!_hasSelection)
-				return null;
-			var r = Normalize(_start, _end);
-			if (r.Size.X < 2 || r.Size.Y < 2)
-				return null;
-			return r;
-		}
-
-		public override void _GuiInput(InputEvent @event)
-		{
-			if (_work == null)
-				return;
-
-			if (@event is InputEventMouseButton mb)
-			{
-				if (mb.ButtonIndex == MouseButton.Left)
-				{
-					if (mb.Pressed)
-					{
-						if (TryMapToImage(mb.Position, out Vector2I p))
-						{
-							_dragging = true;
-							_hasSelection = true;
-							_start = p;
-							_end = p;
-							QueueRedraw();
-						}
-					}
-					else
-					{
-						_dragging = false;
-						QueueRedraw();
-					}
-				}
-				else if (mb.ButtonIndex == MouseButton.Right && mb.Pressed)
-				{
-					_hasSelection = false;
-					QueueRedraw();
-				}
-			}
-			else if (@event is InputEventMouseMotion mm)
-			{
-				if (_dragging && TryMapToImage(mm.Position, out Vector2I p))
-				{
-					_end = p;
-					QueueRedraw();
-				}
-			}
-		}
-
-		public override void _Draw()
-		{
-			if (_work == null || !_hasSelection)
-				return;
-
-			if (!TryGetDisplayRect(out Rect2 disp, out float scale))
-				return;
-
-			Rect2I rImg = Normalize(_start, _end);
-			Vector2 pos = disp.Position + new Vector2(rImg.Position.X * scale, rImg.Position.Y * scale);
-			Vector2 size = new Vector2(rImg.Size.X * scale, rImg.Size.Y * scale);
-			DrawRect(new Rect2(pos, size), new Color(1, 0, 0, 0.12f), filled: true);
-			DrawRect(new Rect2(pos, size), Colors.Red, filled: false, width: 2);
-		}
-
-		private bool TryMapToImage(Vector2 localPos, out Vector2I p)
-		{
-			p = default;
-			if (_work == null)
-				return false;
-			if (!TryGetDisplayRect(out Rect2 disp, out float scale))
-				return false;
-			if (!disp.HasPoint(localPos))
-				return false;
-
-			Vector2 rel = localPos - disp.Position;
-			int x = (int)Mathf.Floor(rel.X / scale);
-			int y = (int)Mathf.Floor(rel.Y / scale);
-			x = Math.Clamp(x, 0, _work.GetWidth() - 1);
-			y = Math.Clamp(y, 0, _work.GetHeight() - 1);
-			p = new Vector2I(x, y);
-			return true;
-		}
-
-		private bool TryGetDisplayRect(out Rect2 rect, out float scale)
-		{
-			rect = default;
-			scale = 1;
-			if (_work == null)
-				return false;
-
-			Vector2 size = _target.Size;
-			if (size.X <= 1 || size.Y <= 1)
-				return false;
-
-			float imgW = _work.GetWidth();
-			float imgH = _work.GetHeight();
-			if (imgW <= 0 || imgH <= 0)
-				return false;
-
-			scale = MathF.Min(size.X / imgW, size.Y / imgH);
-			Vector2 drawSize = new Vector2(imgW * scale, imgH * scale);
-			Vector2 offset = (size - drawSize) * 0.5f;
-			rect = new Rect2(offset, drawSize);
-			return true;
-		}
-
-		private static Rect2I Normalize(Vector2I a, Vector2I b)
-		{
-			int x1 = Math.Min(a.X, b.X);
-			int y1 = Math.Min(a.Y, b.Y);
-			int x2 = Math.Max(a.X, b.X);
-			int y2 = Math.Max(a.Y, b.Y);
-			return new Rect2I(x1, y1, Math.Max(1, x2 - x1), Math.Max(1, y2 - y1));
-		}
-	}
 }

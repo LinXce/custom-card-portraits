@@ -14,6 +14,8 @@ public static class CardPortraitPatch
 			return;
 		if (!ConfigStore.Enabled)
 			return;
+		if (!ConfigStore.IsCardOverrideEnabled(__instance.Pool?.Title ?? string.Empty, __instance.Id?.Entry ?? string.Empty))
+			return;
 		if (CustomPortraitStore.TryGetOverride(__instance, out Texture2D? overrideTex) && overrideTex != null)
 		{
 			__result = overrideTex;
