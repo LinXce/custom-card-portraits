@@ -4,6 +4,8 @@ using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Nodes.Screens.ModdingScreen;
+using MegaCrit.Sts2.Core.Localization.Fonts;
+using MegaCrit.Sts2.Core.Helpers;
 
 namespace CustomCardPortraits.script.Patches;
 
@@ -20,7 +22,7 @@ public static class ModdingScreenUiPatch
 			return;
 
 		bool isOurMod = string.Equals(mod?.manifest?.id, ModId, StringComparison.OrdinalIgnoreCase);
-		var button = __instance.GetNodeOrNull<Button>(ButtonName);
+		var button = __instance.GetNodeOrNull<Control>(ButtonName);
 
 		if (!isOurMod)
 		{
@@ -31,18 +33,51 @@ public static class ModdingScreenUiPatch
 
 		if (button == null)
 		{
-			button = new Button
+			var tb = new TextureButton
 			{
 				Name = ButtonName,
-				Text = "打开卡图编辑器",
 				FocusMode = Control.FocusModeEnum.All,
 				Size = new Vector2(240, 44),
 				ZIndex = 100,
 				ZAsRelative = true,
 			};
 
-			button.Pressed += () => CardPortraitEditorOverlay.ShowEditor(__instance.GetTree());
-			__instance.AddChild(button);
+			// Load original game button textures (fallback to plain button if not found)
+			var normalTex = GD.Load<Texture2D>("res://images/packed/common_ui/event_button.png");
+			var outlineTex = GD.Load<Texture2D>("res://images/packed/common_ui/event_button_outline.png");
+			if (normalTex != null)
+			{
+				tb.TextureNormal = normalTex;
+				tb.Size = normalTex.GetSize();
+			}
+			if (outlineTex != null)
+			{
+				tb.TextureHover = outlineTex;
+				tb.TexturePressed = outlineTex;
+			}
+
+			tb.Pressed += () => CardPortraitEditorOverlay.ShowEditor(__instance.GetTree());
+
+			var label = new Label
+			{
+				Text = "打开卡图编辑器",
+				FocusMode = Control.FocusModeEnum.None,
+				Size = tb.Size,
+				ZIndex = 101,
+			};
+
+			label.HorizontalAlignment = HorizontalAlignment.Center;
+			label.VerticalAlignment = VerticalAlignment.Center;
+
+			// Apply game's locale font and label theme so text matches original UI
+			label.ApplyLocaleFontSubstitution(FontType.Regular, "font");
+			label.AddThemeFontSizeOverride("font_size", 24);
+			label.AddThemeColorOverride("font_color", StsColors.cream);
+			label.AddThemeColorOverride("font_outline_color", StsColors.cardTitleOutlineCommon);
+
+			tb.AddChild(label);
+			button = tb;
+			__instance.AddChild(tb);
 		}
 
 		button.Position = GetButtonPos(__instance, button.Size);

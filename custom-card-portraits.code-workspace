@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "custom-card-portraits",
+			"path": "."
+		},
+		{
+			"name": "Slay the Spire 2",
+			"path": "../Slay the Spire 2"
+		}
+	],
+	"settings": {}
+}
