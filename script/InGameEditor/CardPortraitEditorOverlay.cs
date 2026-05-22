@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Localization.Fonts;
@@ -33,9 +34,19 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 	private readonly Dictionary<string, List<string>> _cardsByPool = new(StringComparer.OrdinalIgnoreCase);
 	private string? _currentPool;
 	private string? _currentCard;
+	private string? _pendingPool;
+	private string? _pendingCard;
+	private bool _pendingResetToOriginal;
 	private bool _openOnReady;
+	private Tween? _openTween;
+	private Tween? _closeTween;
 
 	public static void ShowEditor(SceneTree tree)
+	{
+		ShowEditor(tree, null);
+	}
+
+	public static void ShowEditor(SceneTree tree, CardModel? selectedCard)
 	{
 		if (tree?.Root == null)
 			return;
@@ -49,15 +60,21 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 				Layer = 200,
 				Visible = true,
 				_openOnReady = true,
+				_pendingPool = selectedCard?.Pool?.Title,
+				_pendingCard = selectedCard?.Id?.Entry,
 			};
 			tree.Root.AddChild(existing);
 			return;
 		}
 
 		if (existing.IsNodeReady())
-			existing.Open();
+			existing.Open(selectedCard);
 		else
+		{
+			existing._pendingPool = selectedCard?.Pool?.Title;
+			existing._pendingCard = selectedCard?.Id?.Entry;
 			existing._openOnReady = true;
+		}
 	}
 
 	public override void _Ready()
@@ -90,19 +107,95 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 		}
 	}
 
-	private void Open()
+	private void Open(CardModel? selectedCard = null)
 	{
+		_closeTween?.Kill();
+		if (selectedCard != null)
+		{
+			_pendingPool = selectedCard.Pool?.Title;
+			_pendingCard = selectedCard.Id?.Entry;
+		}
+
 		Visible = true;
 		_root.Visible = true;
 		UpdateLayout();
-		RefreshPreviews();
-		_poolSelect?.GrabFocus();
+
+		if (!TryApplyPendingSelection())
+			RefreshPreviews();
+
+		StartOpenAnimation();
+		(_cardSelect ?? _poolSelect)?.GrabFocus();
 	}
 
 	private void Close()
 	{
-		_root.Visible = false;
-		Visible = false;
+		_openTween?.Kill();
+		if (!Visible || !_root.Visible)
+		{
+			_closeTween?.Kill();
+			_root.Visible = false;
+			Visible = false;
+			return;
+		}
+
+		_closeTween?.Kill();
+		Vector2 targetPosition = _panel.Position + Vector2.Up * 36f;
+		_closeTween = CreateTween().SetParallel();
+		_closeTween.TweenProperty(_panel, "position", targetPosition, 0.2f).SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Cubic);
+		_closeTween.TweenProperty(_panel, "modulate:a", 0f, 0.16f).SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Sine);
+		_closeTween.Chain().TweenCallback(Callable.From(delegate
+		{
+			_root.Visible = false;
+			Visible = false;
+			_panel.Modulate = Colors.White;
+		}));
+	}
+
+	private void StartOpenAnimation()
+	{
+		_openTween?.Kill();
+		Vector2 targetPosition = _panel.Position;
+		_panel.Position = targetPosition + Vector2.Up * 36f;
+		_panel.Modulate = new Color(1f, 1f, 1f, 0f);
+		_openTween = CreateTween().SetParallel();
+		_openTween.TweenProperty(_panel, "position", targetPosition, 0.24f).SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Cubic);
+		_openTween.TweenProperty(_panel, "modulate:a", 1f, 0.18f).SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Sine);
+	}
+
+	private bool TryApplyPendingSelection()
+	{
+		if (string.IsNullOrWhiteSpace(_pendingPool) || string.IsNullOrWhiteSpace(_pendingCard))
+			return false;
+
+		int poolIndex = FindOptionIndex(_poolSelect, _pendingPool);
+		if (poolIndex < 0)
+			return false;
+
+		_pendingPool = _pendingPool.Trim();
+		_pendingCard = _pendingCard.Trim();
+		_poolSelect.Select(poolIndex);
+		OnPoolSelected(poolIndex);
+
+		int cardIndex = FindOptionIndex(_cardSelect, _pendingCard);
+		if (cardIndex >= 0)
+		{
+			_cardSelect.Select(cardIndex);
+			OnCardSelected(cardIndex);
+		}
+
+		_pendingPool = null;
+		_pendingCard = null;
+		return true;
+	}
+
+	private static int FindOptionIndex(OptionButton option, string value)
+	{
+		for (int i = 0; i < option.ItemCount; i++)
+		{
+			if (string.Equals(option.GetItemText(i), value, StringComparison.OrdinalIgnoreCase))
+				return i;
+		}
+		return -1;
 	}
 
 	private void BuildUi()
@@ -414,6 +507,7 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			_workPreview.Texture = tex;
 			ApplyPortraitOverride(_overrideCardPreview, tex);
 		}
+		_pendingResetToOriginal = false;
 	}
 
 	private void OnFileSelected(string path)
@@ -431,6 +525,7 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			_cropOverlay.SetWorkImage(img);
 			_workPreview.Texture = ImageTexture.CreateFromImage(img);
 			ApplyPortraitOverride(_overrideCardPreview, _workPreview.Texture as Texture2D);
+				_pendingResetToOriginal = false;
 			SetStatus("已加载工作图：先裁切，再保存。", isError: false);
 		}
 		catch (Exception ex)
@@ -447,6 +542,18 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			return;
 		}
 
+		string pool = _currentPool!.ToLowerInvariant();
+		string id = _currentCard!.ToLowerInvariant();
+
+		if (_pendingResetToOriginal)
+		{
+			ConfigStore.SetCardOverrideEnabled(pool, id, false);
+			RefreshVisibleCardViews(GetTree());
+			_pendingResetToOriginal = false;
+			SetStatus("已保存为原版状态，并关闭该卡的替换。", isError: false);
+			return;
+		}
+
 		Image? work = _cropOverlay.GetWorkImage();
 		if (work == null)
 		{
@@ -454,8 +561,6 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			return;
 		}
 
-		string pool = _currentPool!.ToLowerInvariant();
-		string id = _currentCard!.ToLowerInvariant();
 		string outVirtual = $"{OverrideRootVirtual}/{pool}/{id}.png";
 		string outAbs = ProjectSettings.GlobalizePath(outVirtual);
 
@@ -481,6 +586,8 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 
 			_applySavedTextureToPreview(toSave);
 			ConfigStore.SetCardOverrideEnabled(pool, id, true);
+			_pendingResetToOriginal = false;
+			RefreshVisibleCardViews(GetTree());
 
 			SetStatus($"已保存: {outVirtual}", isError: false);
 		}
@@ -498,12 +605,9 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			return;
 		}
 
-		_cropOverlay.ClearSelection();
-		_workPreview.Texture = null;
-		_cropOverlay.SetWorkImage(null);
-		ConfigStore.SetCardOverrideEnabled(_currentPool!.ToLowerInvariant(), _currentCard!.ToLowerInvariant(), false);
+		_pendingResetToOriginal = true;
 		ApplyPortraitOverride(_overrideCardPreview, LoadOriginalPortrait(_overrideCardPreview.Model));
-		SetStatus("已重置为原版预览，并关闭该卡的替换。", isError: false);
+		SetStatus("已切回原版预览，保存后会关闭该卡的替换。", isError: false);
 	}
 
 	private void CropWorkImage()
@@ -536,10 +640,9 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 		}
 
 		Image cropped = work.GetRegion(r);
-		_cropOverlay.SetWorkImage(cropped);
-		_workPreview.Texture = ImageTexture.CreateFromImage(cropped);
-		ApplyPortraitOverride(_overrideCardPreview, _workPreview.Texture as Texture2D);
-		SetStatus("已裁切工作图，接下来点击保存。", isError: false);
+		ApplyPortraitOverride(_overrideCardPreview, ImageTexture.CreateFromImage(cropped));
+		_pendingResetToOriginal = false;
+		SetStatus("已应用当前裁切预览，可继续调整后再保存。", isError: false);
 	}
 
 	private void _applySavedTextureToPreview(Image savedImage)
@@ -556,6 +659,26 @@ public sealed partial class CardPortraitEditorOverlay : CanvasLayer
 			string.Equals(c.Pool.Title, poolKey, StringComparison.OrdinalIgnoreCase));
 		return match ?? ModelDb.AllCards.FirstOrDefault((CardModel c) =>
 			string.Equals(c.Id.Entry, entry, StringComparison.OrdinalIgnoreCase));
+	}
+
+	private static void RefreshVisibleCardViews(SceneTree tree)
+	{
+		if (tree?.Root == null)
+			return;
+
+		RefreshVisibleCardViewsRecursive(tree.Root);
+	}
+
+	private static void RefreshVisibleCardViewsRecursive(Node node)
+	{
+		if (node is NCard card && card.IsNodeReady())
+		{
+			var reloadMethod = typeof(NCard).GetMethod("Reload", BindingFlags.Instance | BindingFlags.NonPublic);
+			reloadMethod?.Invoke(card, Array.Empty<object>());
+		}
+
+		foreach (Node child in node.GetChildren())
+			RefreshVisibleCardViewsRecursive(child);
 	}
 
 }
